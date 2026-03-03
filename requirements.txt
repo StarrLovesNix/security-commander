@@ -1,0 +1,21 @@
+# Security Commander — Python dependencies
+#
+# All runtime dependencies are Python standard library modules.
+# No third-party packages are required.
+#
+# System binaries required (install via your package manager):
+#   nmap          — network port scanning
+#   ss            — socket statistics (iproute2, Linux only)
+#   ufw           — firewall management (Debian/Ubuntu/Mint)
+#                   OR firewalld (RHEL/Fedora/CentOS)
+#                   OR iptables (any Linux)
+#
+# Install on Debian/Ubuntu/Mint:
+#   sudo apt install nmap ufw
+#
+# Install on RHEL/Fedora/CentOS:
+#   sudo dnf install nmap firewalld
+#
+# Optional (for development):
+# pytest>=7.0
+# mypy>=1.0

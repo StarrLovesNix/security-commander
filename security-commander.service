@@ -1,0 +1,19 @@
+[Unit]
+Description=Security Commander Daily Security Scan
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/bin/env python3 INSTALL_DIR/security_commander.py
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=security-commander
+
+# Security hardening
+PrivateTmp=false
+NoNewPrivileges=false
+
+[Install]
+WantedBy=multi-user.target

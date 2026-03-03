@@ -1,0 +1,41 @@
+{
+    "email": {
+        "enabled": false,
+        "smtp_server": "smtp.gmail.com",
+        "smtp_port": 587,
+        "sender": "YOUR_EMAIL@gmail.com",
+        "recipient": "YOUR_EMAIL@gmail.com",
+        "app_password": "YOUR_GMAIL_APP_PASSWORD_HERE"
+    },
+    "scan": {
+        "network_interface": "auto",
+        "scan_timeout_seconds": 300,
+        "nmap_args": "-sV --open -T3",
+        "excluded_ips": [],
+        "trusted_networks": []
+    },
+    "thresholds": {
+        "failed_ssh_attempts_warning": 5,
+        "failed_ssh_attempts_block": 20,
+        "new_device_alert": true,
+        "unexpected_port_alert": true
+    },
+    "remediation": {
+        "auto_block_brute_force": true,
+        "auto_block_threshold": 20,
+        "auto_kill_cryptominers": true,
+        "require_approval_for_high": true
+    },
+    "logging": {
+        "report_dir": "reports",
+        "keep_reports_days": 30,
+        "log_level": "INFO"
+    },
+    "alert_history": {
+        "enabled": true,
+        "cooldown_days": { "CRITICAL": 0, "HIGH": 3, "MEDIUM": 7, "LOW": 14 },
+        "history_file": "data/alert_history.json",
+        "include_resolved_in_email": true,
+        "resolved_retention_days": 30
+    }
+}

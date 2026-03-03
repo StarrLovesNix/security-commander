@@ -1,0 +1,22 @@
+# Credentials — never commit
+config.json
+
+# Auto-generated runtime data
+data/baseline.json
+data/alert_history.json
+reports/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+dist/
+build/
+*.egg-info/
+.eggs/
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*~

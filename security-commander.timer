@@ -1,0 +1,12 @@
+[Unit]
+Description=Run Security Commander daily at 06:00
+Requires=security-commander.service
+
+[Timer]
+OnCalendar=*-*-* 06:00:00
+RandomizedDelaySec=300
+Persistent=true
+Unit=security-commander.service
+
+[Install]
+WantedBy=timers.target
