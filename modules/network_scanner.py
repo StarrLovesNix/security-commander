@@ -37,12 +37,31 @@ def _run_nmap(args, timeout=120):
             ['nmap'] + args,
             capture_output=True, text=True, timeout=timeout
         )
+        # On Windows, nmap requires Npcap for raw-packet scans (ARP, SYN, etc.).
+        # If Npcap is missing, nmap exits 0 but prints a warning to stderr.
+        if result.returncode == 0 and result.stderr and 'npcap' in result.stderr.lower():
+            logger.warning(
+                "nmap requires Npcap for raw-packet scans on Windows. "
+                "Download Npcap from https://npcap.com/ and reinstall nmap."
+            )
         return result.stdout.strip(), result.returncode
     except subprocess.TimeoutExpired:
         logger.warning(f"nmap timed out: {args}")
         return "", 1
     except FileNotFoundError:
-        logger.error("nmap not found. Install with: sudo apt install nmap")
+        if platform_adapter.SYSTEM == 'Windows':
+            logger.error(
+                "nmap not found. Download the Windows installer from "
+                "https://nmap.org/download.html and ensure it is added to PATH. "
+                "Also install Npcap from https://npcap.com/ for full scan support."
+            )
+        else:
+            logger.error(
+                "nmap not found. Install it with your package manager: "
+                "  Debian/Ubuntu:  sudo apt install nmap\n"
+                "  RHEL/Fedora:    sudo dnf install nmap\n"
+                "  Arch:           sudo pacman -S nmap"
+            )
         return "", 1
     except Exception as e:
         logger.error(f"nmap failed: {e}")

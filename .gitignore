@@ -4,7 +4,8 @@ config.json
 # Auto-generated runtime data
 data/baseline.json
 data/alert_history.json
-reports/
+reports/*
+!reports/.gitkeep
 
 # Python
 __pycache__/
