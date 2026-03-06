@@ -1,17 +1,19 @@
 [project]
 name = "security-commander"
 version = "1.0.0"
-description = "Lightweight daily security scanner for Linux systems"
+description = "Lightweight daily security scanner for Linux and Windows systems"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
-keywords = ["security", "monitoring", "linux", "network-scanner", "sysadmin"]
+keywords = ["security", "monitoring", "linux", "windows", "network-scanner", "sysadmin"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Environment :: Console",
     "Intended Audience :: System Administrators",
     "License :: OSI Approved :: MIT License",
     "Operating System :: POSIX :: Linux",
+    "Operating System :: Microsoft :: Windows :: Windows 10",
+    "Operating System :: Microsoft :: Windows :: Windows 11",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",

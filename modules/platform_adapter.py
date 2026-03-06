@@ -5,9 +5,9 @@ Provides a single interface for every platform-specific system call so that
 adding support for a new OS means editing exactly one file.
 
 Current support:
-  Linux  — full implementation (Debian/Ubuntu/Mint, RHEL/Fedora, Arch)
-  macOS  — partial (hostname, processes, network CIDR, log paths, kill, chmod)
-  Windows — stubs only (NotImplementedError with helpful messages)
+  Linux   — full implementation (Debian/Ubuntu/Mint, RHEL/Fedora, Arch)
+  macOS   — partial (hostname, processes, network CIDR, log paths, kill, chmod)
+  Windows — full implementation (Windows 10/11)
 
 To add a new platform:
   1. Add an `elif SYSTEM == 'YourOS':` branch to the relevant functions below.
@@ -107,7 +107,7 @@ def list_processes_raw() -> str:
       USER  PID  %CPU  %MEM  VSZ  RSS  TTY  STAT  START  TIME  COMMAND
 
     This matches `ps aux --no-headers` so the existing parser in
-    local_scanner.py works unchanged on both Linux and macOS.
+    local_scanner.py works unchanged on Linux, macOS, and Windows.
     """
     if SYSTEM == 'Linux':
         _, out, _ = _run(['ps', 'aux', '--no-headers'])
@@ -117,6 +117,25 @@ def list_processes_raw() -> str:
         lines = out.splitlines()
         # Strip the BSD ps header line
         return '\n'.join(lines[1:]) if len(lines) > 1 else ''
+    elif SYSTEM == 'Windows':
+        # Use PowerShell Get-Process to emit one line per process in the
+        # ps-aux 11-field format: USER PID CPU MEM VSZ RSS TTY STAT START TIME CMD
+        # CPU is cumulative seconds (no live %CPU from Windows), reported as 0.0
+        # MEM is WorkingSet in MB, VSZ/RSS use WorkingSet64 bytes
+        ps_script = (
+            "Get-Process | ForEach-Object { "
+            "$p = $_; "
+            "$path = if ($p.Path) { $p.Path } else { $p.ProcessName }; "
+            "$cpu = if ($p.CPU) { [math]::Round($p.CPU, 1) } else { 0.0 }; "
+            "$mem = [math]::Round($p.WorkingSet64 / 1MB, 1); "
+            "$ws = $p.WorkingSet64; "
+            "\"SYSTEM $($p.Id) $cpu $mem 0 $ws ? S 00:00 0:00 $path\" }"
+        )
+        _, out, _ = _run(
+            ['powershell', '-NoProfile', '-NonInteractive', '-Command', ps_script],
+            timeout=60
+        )
+        return out
     else:
         _not_implemented('list_processes_raw')
 
@@ -170,6 +189,50 @@ def list_open_ports() -> List[Dict]:
                         'port': int(port_str),
                         'local_addr': addr_field,
                         'process': parts[0],
+                    })
+        return ports
+
+    elif SYSTEM == 'Windows':
+        # Build a PID -> process name map from tasklist CSV output
+        pid_to_name: Dict[str, str] = {}
+        _, tl_out, _ = _run(['tasklist', '/fo', 'csv', '/nh'])
+        for line in tl_out.splitlines():
+            # Each CSV line: "Image Name","PID","Session Name","Session#","Mem Usage"
+            parts = [p.strip('"') for p in line.split('","')]
+            if len(parts) >= 2 and parts[1].isdigit():
+                pid_to_name[parts[1]] = parts[0]
+
+        # netstat -ano: shows local address, state, and owning PID
+        _, ns_out, _ = _run(['netstat', '-ano'])
+        ports = []
+        seen_ports: set = set()
+        for line in ns_out.splitlines():
+            line = line.strip()
+            if not line or 'LISTENING' not in line:
+                continue
+            parts = line.split()
+            # Format: Proto  Local Address  Foreign Address  State  PID
+            if len(parts) < 5:
+                continue
+            proto = parts[0].lower()   # TCP
+            local_addr = parts[1]      # 0.0.0.0:80 or [::]:80
+            pid = parts[4]
+
+            # Strip IPv6 brackets for port extraction
+            addr_clean = local_addr.lstrip('[')
+            if ':' in addr_clean:
+                port_str = addr_clean.rsplit(':', 1)[-1]
+                if port_str.isdigit():
+                    port_num = int(port_str)
+                    key = (proto, port_num)
+                    if key in seen_ports:
+                        continue
+                    seen_ports.add(key)
+                    ports.append({
+                        'proto': proto,
+                        'port': port_num,
+                        'local_addr': local_addr,
+                        'process': pid_to_name.get(pid, f'pid:{pid}'),
                     })
         return ports
 
@@ -250,6 +313,32 @@ def get_local_network_cidr() -> Optional[str]:
                             continue
         return None
 
+    elif SYSTEM == 'Windows':
+        # Parse `ipconfig /all` to find an RFC-1918 IPv4 address with its subnet mask.
+        _, out, _ = _run(['ipconfig', '/all'])
+        current_ipv4: Optional[str] = None
+        for line in out.splitlines():
+            stripped = line.strip()
+            # Match: "IPv4 Address. . . . . . . . . . . : 192.168.1.10(Preferred)"
+            if 'IPv4 Address' in stripped and ':' in stripped:
+                addr = stripped.split(':', 1)[1].strip().rstrip('(Preferred)').strip()
+                # Only care about RFC-1918 private addresses (LAN)
+                try:
+                    parsed = ipaddress.ip_address(addr)
+                    if parsed.is_private and not parsed.is_loopback:
+                        current_ipv4 = addr
+                except ValueError:
+                    pass
+            # Match: "Subnet Mask . . . . . . . . . . . : 255.255.255.0"
+            elif 'Subnet Mask' in stripped and ':' in stripped and current_ipv4:
+                mask = stripped.split(':', 1)[1].strip()
+                try:
+                    cidr = str(ipaddress.ip_interface(f'{current_ipv4}/{mask}').network)
+                    return cidr
+                except ValueError:
+                    current_ipv4 = None   # reset and keep looking
+        return None
+
     else:
         _not_implemented('get_local_network_cidr')
 
@@ -260,9 +349,13 @@ def get_local_network_cidr() -> Optional[str]:
 
 def get_auth_log_paths() -> List[str]:
     """
-    Return an ordered list of auth/syslog file paths to analyse.
-    Handles the main Linux distribution families and macOS.
-    Non-existent paths are skipped silently by log_analyzer.py.
+    Return an ordered list of auth/syslog sources to analyse.
+
+    On Linux/macOS: returns file system paths.
+    On Windows: returns sentinel strings 'WinEvent:<channel>' which
+    log_analyzer.py detects and routes to the Windows Event Log reader.
+
+    Non-existent file paths are skipped silently by log_analyzer.py.
     """
     if SYSTEM == 'Linux':
         # RHEL family (Fedora, CentOS, AlmaLinux, Rocky, Amazon Linux, openSUSE)
@@ -282,6 +375,12 @@ def get_auth_log_paths() -> List[str]:
     elif SYSTEM == 'Darwin':
         return ['/var/log/auth.log', '/var/log/system.log']
 
+    elif SYSTEM == 'Windows':
+        # Sentinel values — log_analyzer.py routes these to the Windows Event Log reader.
+        # Security: logon failures, successes, user/group changes, privilege use
+        # System:   service start/stop, unexpected shutdowns
+        return ['WinEvent:Security', 'WinEvent:System']
+
     else:
         _not_implemented('get_auth_log_paths')
 
@@ -293,8 +392,8 @@ def get_auth_log_paths() -> List[str]:
 def get_firewall_backend() -> str:
     """
     Detect the available firewall management tool.
-    Returns one of: 'ufw', 'firewalld', 'iptables', 'pfctl', 'none'.
-    Priority order: ufw > firewalld > iptables (Linux), pfctl (macOS).
+    Returns one of: 'ufw', 'firewalld', 'iptables', 'pfctl', 'netsh', 'none'.
+    Priority order: ufw > firewalld > iptables (Linux), pfctl (macOS), netsh (Windows).
     """
     if SYSTEM == 'Linux':
         if shutil.which('ufw'):
@@ -306,6 +405,11 @@ def get_firewall_backend() -> str:
         return 'none'
     elif SYSTEM == 'Darwin':
         return 'pfctl'
+    elif SYSTEM == 'Windows':
+        # netsh advfirewall is always available on Windows 10/11
+        if shutil.which('netsh'):
+            return 'netsh'
+        return 'none'
     else:
         return 'none'
 
@@ -327,6 +431,12 @@ def is_ip_blocked(ip: str) -> bool:
     elif backend == 'iptables':
         _, out, _ = _run(['iptables', '-L', 'INPUT', '-n'])
         return ip in out
+    elif backend == 'netsh':
+        rule_name = f"SC_Block_{ip}"
+        _, out, _ = _run([
+            'netsh', 'advfirewall', 'firewall', 'show', 'rule', f'name={rule_name}'
+        ])
+        return bool(out) and 'No rules match' not in out
     return False
 
 
@@ -375,6 +485,20 @@ def block_ip(ip: str) -> Tuple[bool, str]:
     elif backend == 'pfctl':
         _not_implemented('block_ip via pfctl (macOS)')
 
+    elif backend == 'netsh':
+        rule_name = f"SC_Block_{ip}"
+        ok, _, err = _run([
+            'netsh', 'advfirewall', 'firewall', 'add', 'rule',
+            f'name={rule_name}',
+            'dir=in',
+            'action=block',
+            f'remoteip={ip}',
+        ])
+        if ok:
+            logger.warning(f"REMEDIATION: Blocked {ip} via Windows Firewall")
+            return True, f"Blocked {ip} via Windows Firewall"
+        return False, f"netsh block failed: {err}"
+
     return False, f"No supported firewall found (detected: {backend!r})"
 
 
@@ -396,6 +520,14 @@ def kill_process(pid: str, cmd_hint: str = '') -> Tuple[bool, str]:
             logger.warning(f"REMEDIATION: Killed PID {pid} ({cmd_hint[:50]})")
             return True, f"Killed PID {pid}"
         return False, f"Failed to kill PID {pid}: {err}"
+
+    elif SYSTEM == 'Windows':
+        ok, _, err = _run(['taskkill', '/PID', str(pid), '/F'])
+        if ok:
+            logger.warning(f"REMEDIATION: Killed PID {pid} ({cmd_hint[:50]})")
+            return True, f"Killed PID {pid}"
+        return False, f"taskkill failed for PID {pid}: {err}"
+
     else:
         _not_implemented('kill_process')
 
@@ -406,7 +538,10 @@ def kill_process(pid: str, cmd_hint: str = '') -> Tuple[bool, str]:
 
 def fix_file_permissions(filepath: str) -> Tuple[bool, str]:
     """
-    Remove world-write permission from a file (chmod o-w).
+    Restrict file permissions to remove broad public access.
+    Linux/macOS: removes world-write bit (chmod o-w).
+    Windows: resets ACL inheritance and grants Administrators + SYSTEM full
+             control only, removing Everyone/Users write permissions.
     Returns (success, message).
     """
     if SYSTEM in ('Linux', 'Darwin'):
@@ -415,6 +550,21 @@ def fix_file_permissions(filepath: str) -> Tuple[bool, str]:
             logger.warning(f"REMEDIATION: Removed world-write from {filepath}")
             return True, f"Removed world-writable permission from {filepath}"
         return False, f"chmod failed for {filepath}: {err}"
+
+    elif SYSTEM == 'Windows':
+        # /inheritance:r  — disable ACL inheritance (take ownership of permissions)
+        # /grant:r        — replace (not add) the ACE for the given trustee
+        ok, _, err = _run([
+            'icacls', filepath,
+            '/inheritance:r',
+            '/grant:r', 'Administrators:(F)',
+            '/grant:r', 'SYSTEM:(F)',
+        ])
+        if ok:
+            logger.warning(f"REMEDIATION: Restricted ACL on {filepath}")
+            return True, f"Restricted file permissions (Administrators+SYSTEM only) on {filepath}"
+        return False, f"icacls failed for {filepath}: {err}"
+
     else:
         _not_implemented('fix_file_permissions')
 
@@ -425,8 +575,8 @@ def fix_file_permissions(filepath: str) -> Tuple[bool, str]:
 
 def get_available_schedulers() -> Dict[str, bool]:
     """
-    Detect which scheduling mechanisms are available.
-    Returns: {'systemd': bool, 'cron': bool, 'launchd': bool}
+    Detect which scheduling mechanisms are available on this system.
+    Returns: {'systemd': bool, 'cron': bool, 'launchd': bool, 'task_scheduler': bool}
     """
     return {
         'systemd': (
@@ -435,4 +585,5 @@ def get_available_schedulers() -> Dict[str, bool]:
         ),
         'cron': bool(shutil.which('crontab')),
         'launchd': SYSTEM == 'Darwin' and Path('/Library/LaunchDaemons').is_dir(),
+        'task_scheduler': SYSTEM == 'Windows' and bool(shutil.which('schtasks')),
     }

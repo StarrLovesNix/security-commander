@@ -19,7 +19,9 @@ import argparse
 import json
 import logging
 import os
+import platform
 import sys
+import tempfile
 import time
 from datetime import datetime
 from pathlib import Path
@@ -35,7 +37,7 @@ BASE_DIR = Path(__file__).parent
 CONFIG_FILE = BASE_DIR / "config.json"
 DATA_DIR = BASE_DIR / "data"
 BASELINE_FILE = DATA_DIR / "baseline.json"
-LOCK_FILE = Path("/tmp/security_commander.lock")
+LOCK_FILE = Path(tempfile.gettempdir()) / "security_commander.lock"
 HISTORY_FILE = DATA_DIR / "alert_history.json"
 
 
@@ -284,6 +286,21 @@ def run_scan(config, baseline, no_email=False, force_baseline=False):
     return summary
 
 
+def _is_admin() -> bool:
+    """Cross-platform check for elevated / administrator privileges."""
+    if platform.system() == 'Windows':
+        try:
+            import ctypes
+            return bool(ctypes.windll.shell32.IsUserAnAdmin())
+        except Exception:
+            return False
+    # Linux / macOS
+    try:
+        return os.geteuid() == 0
+    except AttributeError:
+        return False
+
+
 def main():
     parser = argparse.ArgumentParser(description="Security Commander — Daily Security Agent")
     parser.add_argument('--baseline', action='store_true',
@@ -306,11 +323,12 @@ def main():
         run_acknowledge(config)
         sys.exit(0)
 
-    # Check root
-    if os.geteuid() != 0:
+    # Check for elevated privileges
+    if not _is_admin():
         logger.warning(
-            "Not running as root. Some scans (SUID files, auth logs) may be incomplete. "
-            "Run with sudo for full functionality."
+            "Not running as administrator / root. Some scans (SUID files, auth logs, "
+            "firewall rules) may be incomplete. "
+            "Run with sudo (Linux/macOS) or as Administrator (Windows) for full functionality."
         )
 
     acquire_lock()
