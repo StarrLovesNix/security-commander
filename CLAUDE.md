@@ -15,7 +15,7 @@ A daily security scanner for **Linux and Windows 10/11**. It scans the local mac
 1. **No third-party Python packages.** stdlib only. This is intentional for security and portability. The dev dependencies in `pyproject.toml` (`pytest`, `mypy`) are never imported by the application itself.
 2. **No `shell=True` in subprocess calls.** All system commands use argument lists.
 3. **Validate IPs before use.** Call `platform_adapter.validate_ip(ip)` before passing any network-derived value to a system command. This prevents injection.
-4. **All platform-specific code belongs in `modules/platform_adapter.py` only.** Every other module calls through it.
+4. **All platform-specific code belongs in `modules/platform_adapter.py` only.** Every other module calls through it. Exception: `local_scanner.py` and `log_analyzer.py` contain Windows branches for functions whose entire logic is platform-specific (user enumeration, Event Log parsing).
 
 ---
 
@@ -24,6 +24,9 @@ A daily security scanner for **Linux and Windows 10/11**. It scans the local mac
 ```
 security_commander.py          Orchestrator: loads config, acquires lock,
                                calls all 3 scanners, assesses, remediates, notifies.
+                               Cross-platform: _is_admin() via ctypes on Windows,
+                               os.geteuid() on Linux/macOS. Lock file uses
+                               tempfile.gettempdir() (not hardcoded /tmp).
 
 modules/
   platform_adapter.py          THE OS abstraction layer. Contains every
@@ -37,6 +40,9 @@ modules/
 
   network_scanner.py           LAN discovery and port scanning via nmap.
                                Uses platform_adapter.get_local_network_cidr().
+                               FileNotFoundError shows platform-specific install
+                               instructions (apt/dnf/pacman on Linux; nmap.org on
+                               Windows). Detects missing Npcap via stderr check.
 
   log_analyzer.py              Linux: regex on /var/log/auth.log-style files.
                                Windows: wevtutil XML → Event IDs 4625/4624/4720/
@@ -69,8 +75,8 @@ Each scanner returns `(findings: list[dict], snapshot: dict)`. Snapshot is diffe
 | Platform | Status |
 |---|---|
 | Debian/Ubuntu/Mint/RHEL/Fedora/Arch | Full |
-| macOS | Partial (no firewall remediation) |
-| Windows 10/11 | Full (added in this branch) |
+| macOS | Partial (no firewall remediation — pfctl not implemented) |
+| Windows 10/11 | Full |
 
 ### Windows tool mapping
 
@@ -87,6 +93,7 @@ Each scanner returns `(findings: list[dict], snapshot: dict)`. Snapshot is diffe
 | `/etc/passwd` | `net user` | `get_user_accounts()` |
 | `getent group sudo` | `net localgroup Administrators` | `get_sudo_users()` |
 | `/var/log/auth.log` regex | Event IDs 4625/4624/etc. | `analyze_windows_event_log()` |
+| nmap (apt) | nmap.org + Npcap | `_run_nmap()` |
 
 ### Windows Event Log sentinel pattern
 
@@ -103,30 +110,56 @@ Each scanner returns `(findings: list[dict], snapshot: dict)`. Snapshot is diffe
 2. `modules/log_analyzer.py` — Windows path is `analyze_windows_event_log()`; Linux path uses regex
 3. `modules/local_scanner.py` — every Unix-specific function has a Windows branch at the top
 4. `security_commander.py` — start at `_is_admin()` and `acquire_lock()` for cross-platform concerns
+5. `modules/network_scanner.py` — `_run_nmap()` has platform-aware error handling and Npcap detection
 
 ---
 
 ## Running tests
 
 ```bash
-# All 106 tests (Linux + mocked Windows paths)
+# Linux / macOS
 python3 -m unittest discover -s tests -p "test_*.py" -v
 
-# Single module
+# Windows
+python -m unittest discover -s tests -p "test_*.py" -v
+
+# Single module (Linux example)
 python3 -m unittest tests.test_platform_adapter -v
 
 # Syntax check all modules
 python3 -m py_compile modules/*.py security_commander.py setup.py
 ```
 
-Tests use only `unittest` + `unittest.mock` (stdlib). No pytest needed.
+106 tests total. All pass on Linux. Tests use only `unittest` + `unittest.mock` (stdlib).
 Windows code paths are fully tested via mocking — no Windows machine required for the test suite.
+GitHub Actions runs the full matrix (Python 3.10/3.11/3.12 × Ubuntu + Windows) on every push.
 
 ---
 
-## Active branch
+## Current branch and PR status
 
-`claude/security-commander-windows-2FdBx` — the Windows port branch. Has not yet been merged to master.
+**Branch:** `claude/security-commander-windows-2FdBx`
+
+**PR:** Open against `master` — not yet merged.
+PR URL: `https://github.com/StarrLovesNix/security-commander/pull/new/claude/security-commander-windows-2FdBx`
+
+**Commit history on this branch (newest first):**
+```
+be0fd8d  Pre-release polish: nmap Windows guidance, SECURITY.md, directory scaffolding
+54e5b0a  Add documentation, CLAUDE.md session memory, and CI workflow
+5aec3af  Add comprehensive test suite (106 tests, stdlib unittest)
+9e826cc  Add full Windows 10/11 support to Security Commander
+623e0b3  Initial release — Security Commander v1.0.0  ← master HEAD
+```
+
+### Windows testing checklist (pending — to be verified before merging PR)
+
+- [ ] `setup_windows.bat` → UAC elevation works, wizard completes, Task Scheduler task (`SecurityCommander`) created
+- [ ] `python security_commander.py --baseline --no-email --verbose` → full scan completes, `reports/` populated
+- [ ] Second scan → baseline diff detection works (new findings vs baseline)
+- [ ] `python security_commander.py --acknowledge` → interactive suppress works
+- [ ] `wevtutil qe Security` returns events (requires running as Administrator)
+- [ ] GitHub Actions CI passes on `windows-latest` runners (automatic on push)
 
 ---
 
@@ -141,6 +174,7 @@ Windows code paths are fully tested via mocking — no Windows machine required 
 - `data/baseline.json` — snapshot of system state from the last baseline scan. If missing, the next scan creates it automatically (first run).
 - `data/alert_history.json` — cross-scan finding deduplication and cooldown state.
 - `reports/` — HTML scan reports written after each scan.
+- `data/.gitkeep` and `reports/.gitkeep` are tracked so both directories exist after a fresh clone.
 
 ---
 
@@ -161,6 +195,7 @@ Windows code paths are fully tested via mocking — no Windows machine required 
 5. Update `setup.py` with the new installer
 6. Update `pyproject.toml` classifiers
 7. Update `README.md` platform support table
+8. Update this file
 
 ### Severity levels
 `CRITICAL` → `HIGH` → `MEDIUM` → `LOW`
@@ -172,7 +207,6 @@ Auto-remediation only runs on findings with `"auto_remediate": True`. HIGH findi
 ## Known limitations / future work
 
 - **macOS firewall** (`pfctl`) not implemented — `block_ip()` raises `NotImplementedError` for macOS. Medium priority.
-- **nmap on Windows** — nmap must be installed manually and added to PATH. Could auto-detect and warn.
-- **Windows Event Log 4688** (process creation) requires enabling "Audit Process Creation" policy; not on by default. The scanner handles missing events gracefully.
-- **Network scan on Windows** — nmap works on Windows but may need a WinPcap/Npcap driver for some scan types. Document this.
-- **IPv6 support** — the `validate_ip()` function only handles IPv4. IPv6 addresses from Event Log are stripped of their `::ffff:` prefix before use.
+- **Windows Event Log 4688** (process creation) requires enabling "Audit Process Creation" in Local Security Policy; not on by default. The scanner handles missing events gracefully (no crash, just no process findings from Event Log).
+- **IPv6 support** — `validate_ip()` only handles IPv4. IPv6 addresses from Event Log are stripped of their `::ffff:` prefix before use.
+- **nmap Npcap on Windows** — Npcap is required for raw-packet scans (ARP spoofing detection, SYN scans). The scanner now detects and warns when Npcap is missing. Ping-based host discovery (`-sn`) works without Npcap.
