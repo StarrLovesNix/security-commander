@@ -1,0 +1,42 @@
+name: Tests
+
+on:
+  push:
+    branches: [ master, "claude/*" ]
+  pull_request:
+    branches: [ master ]
+
+jobs:
+  test:
+    name: Python ${{ matrix.python-version }} on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Verify syntax (all modules)
+        run: |
+          python -m py_compile modules/platform_adapter.py
+          python -m py_compile modules/local_scanner.py
+          python -m py_compile modules/network_scanner.py
+          python -m py_compile modules/log_analyzer.py
+          python -m py_compile modules/threat_assessor.py
+          python -m py_compile modules/remediator.py
+          python -m py_compile modules/notifier.py
+          python -m py_compile modules/alert_history.py
+          python -m py_compile security_commander.py
+          python -m py_compile setup.py
+
+      - name: Run test suite
+        run: python -m unittest discover -s tests -p "test_*.py" -v

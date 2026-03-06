@@ -20,3 +20,13 @@ build/
 .idea/
 *.swp
 *~
+
+# Environment / secrets
+.env
+.env.*
+*.pem
+*.key
+
+# OS
+.DS_Store
+Thumbs.db
