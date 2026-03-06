@@ -149,7 +149,6 @@ To add support for a new platform, edit `modules/platform_adapter.py` — it's t
 
 ## Security notes
 
-- `config.json` contains your Gmail App Password — do not commit it to version control. Add it to `.gitignore`.
 - Auto-remediation requires root. Run with `sudo` for full functionality.
 - IP addresses from scan results are validated before use in system commands.
 - All subprocess calls use argument lists (not shell strings) to prevent command injection.
