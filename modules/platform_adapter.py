@@ -79,12 +79,15 @@ def validate_ip(ip: str) -> str:
     Validate an IPv4 address string. Raises ValueError if invalid.
     Always call this before passing any network-derived value into a
     system command — it prevents command injection.
+    Uses stdlib ipaddress for authoritative parsing.
     """
-    if not re.match(r'^(\d{1,3}\.){3}\d{1,3}$', str(ip)):
-        raise ValueError(f"Invalid IPv4 address: {ip!r}")
-    if not all(0 <= int(o) <= 255 for o in ip.split('.')):
-        raise ValueError(f"IPv4 octet out of range: {ip!r}")
-    return ip
+    try:
+        addr = ipaddress.ip_address(str(ip).strip())
+    except ValueError:
+        raise ValueError(f"Invalid IP address: {ip!r}")
+    if not isinstance(addr, ipaddress.IPv4Address):
+        raise ValueError(f"Expected IPv4 address, got IPv6: {ip!r}")
+    return str(addr)
 
 
 # ---------------------------------------------------------------------------

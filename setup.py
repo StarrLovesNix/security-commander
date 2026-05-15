@@ -12,7 +12,9 @@ Usage:
 import json
 import os
 import platform
+import shlex
 import shutil
+import stat
 import subprocess
 import sys
 from getpass import getpass
@@ -110,6 +112,7 @@ def configure_email():
 
     with open(CONFIG_FILE, 'w') as f:
         json.dump(config, f, indent=4)
+    os.chmod(CONFIG_FILE, stat.S_IRUSR | stat.S_IWUSR)  # 0o600 — owner read/write only
 
     print("  Gmail credentials saved to config.json")
     return config
@@ -128,7 +131,7 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 User=root
-ExecStart={sys.executable} {BASE_DIR}/security_commander.py
+ExecStart={shlex.quote(sys.executable)} {shlex.quote(str(BASE_DIR / 'security_commander.py'))}
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=security-commander

@@ -22,6 +22,13 @@ from modules import platform_adapter
 
 logger = logging.getLogger(__name__)
 
+
+def _sanitize(value: str, max_len: int = 300) -> str:
+    """Strip control characters from strings derived from log/event data."""
+    cleaned = re.sub(r'[\x00-\x1f\x7f]', '', str(value))
+    return cleaned[:max_len]
+
+
 SSH_FAILED_RE = re.compile(
     r'(\w+\s+\d+\s+\d+:\d+:\d+).*sshd.*(?:Failed password|Invalid user|authentication failure).*from\s+([\d\.a-fA-F:]+)',
     re.IGNORECASE
@@ -536,46 +543,50 @@ def analyze_logs(config):
 
     # --- Brute force findings ---
     for ip, count in failed_attempts.items():
+        safe_ip = _sanitize(ip)
         if count >= brute_threshold_block:
             findings.append({
                 "type": "brute_force_ssh",
                 "severity": "CRITICAL",
-                "ip": ip,
+                "ip": safe_ip,
                 "count": count,
-                "detail": f"Brute force SSH attack from {ip}: {count} failed attempts",
+                "detail": f"Brute force SSH attack from {safe_ip}: {count} failed attempts",
                 "auto_remediate": True,
             })
         elif count >= brute_threshold_warn:
             findings.append({
                 "type": "ssh_failed_attempts",
                 "severity": "HIGH",
-                "ip": ip,
+                "ip": safe_ip,
                 "count": count,
-                "detail": f"Multiple SSH failures from {ip}: {count} attempts",
+                "detail": f"Multiple SSH failures from {safe_ip}: {count} attempts",
                 "auto_remediate": False,
             })
 
     # --- Unusual logins ---
     for login in accepted_logins:
-        ip = login['ip']
+        ip = _sanitize(login['ip'])
+        user = _sanitize(login['user'])
+        timestamp = _sanitize(login['timestamp'])
         if not _is_local_ip(ip):
             findings.append({
                 "type": "ssh_login_external_ip",
                 "severity": "HIGH",
                 "ip": ip,
-                "user": login['user'],
-                "detail": f"SSH login from external IP: {ip} as user {login['user']} at {login['timestamp']}",
+                "user": user,
+                "detail": f"SSH login from external IP: {ip} as user {user} at {timestamp}",
             })
 
     # --- Sudo failures ---
     for user, count in sudo_failures.items():
+        safe_user = _sanitize(user)
         if count >= 3:
             findings.append({
                 "type": "sudo_auth_failure",
                 "severity": "MEDIUM",
-                "user": user,
+                "user": safe_user,
                 "count": count,
-                "detail": f"Repeated sudo authentication failures for user: {user} ({count} times)",
+                "detail": f"Repeated sudo authentication failures for user: {safe_user} ({count} times)",
             })
 
     # --- Privileged sudo commands (informational) ---
@@ -587,14 +598,16 @@ def analyze_logs(config):
     ]
     dangerous_re = [re.compile(p, re.IGNORECASE) for p in dangerous_sudo_patterns]
     for cmd_entry in sudo_commands:
+        safe_user = _sanitize(cmd_entry['user'])
+        safe_cmd = _sanitize(cmd_entry['command'])
         for pattern in dangerous_re:
-            if pattern.search(cmd_entry['command']):
+            if pattern.search(safe_cmd):
                 findings.append({
                     "type": "dangerous_sudo_command",
                     "severity": "HIGH",
-                    "user": cmd_entry['user'],
-                    "command": cmd_entry['command'],
-                    "detail": f"Potentially dangerous sudo command by {cmd_entry['user']}: {cmd_entry['command'][:100]}",
+                    "user": safe_user,
+                    "command": safe_cmd,
+                    "detail": f"Potentially dangerous sudo command by {safe_user}: {safe_cmd[:100]}",
                 })
                 break
 

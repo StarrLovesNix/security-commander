@@ -7,6 +7,9 @@ Cooldown defaults: CRITICAL=0 days (always), HIGH=3, MEDIUM=7, LOW=14.
 
 import json
 import logging
+import os
+import stat
+import tempfile
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -48,14 +51,18 @@ def save_history(history, path=None):
     """Atomically write alert history to JSON file."""
     path = Path(path) if path else DEFAULT_HISTORY_FILE
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix('.tmp')
+    tmp_path = None
     try:
-        with open(tmp, 'w') as f:
+        fd, tmp_name = tempfile.mkstemp(dir=path.parent, suffix='.json')
+        tmp_path = Path(tmp_name)
+        with os.fdopen(fd, 'w') as f:
             json.dump(history, f, indent=2, default=str)
-        tmp.replace(path)
+        tmp_path.replace(path)
+        path.chmod(stat.S_IRUSR | stat.S_IWUSR)  # 0o600 — history contains sensitive findings
     except IOError as e:
         logger.error(f"Failed to save alert history to {path}: {e}")
-        tmp.unlink(missing_ok=True)
+        if tmp_path and tmp_path.exists():
+            tmp_path.unlink(missing_ok=True)
         raise
 
 

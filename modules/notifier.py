@@ -4,6 +4,7 @@ Email uses Gmail SMTP with App Password authentication.
 """
 
 import smtplib
+import ssl
 import logging
 import json
 import os
@@ -309,8 +310,9 @@ def send_email(config, subject, html_body, text_body):
         msg.attach(MIMEText(text_body, 'plain'))
         msg.attach(MIMEText(html_body, 'html'))
 
+        tls_context = ssl.create_default_context()
         with smtplib.SMTP(smtp_server, smtp_port) as server:
-            server.starttls()
+            server.starttls(context=tls_context)
             server.login(sender, app_password)
             server.sendmail(sender, recipient, msg.as_string())
 

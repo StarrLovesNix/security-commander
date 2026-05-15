@@ -93,16 +93,20 @@ def save_baseline(snapshot):
 
 
 def acquire_lock():
-    if LOCK_FILE.exists():
-        # Check if the process that created it is still running
+    try:
+        # Exclusive create — atomic, no TOCTOU window
+        with open(LOCK_FILE, 'x') as f:
+            f.write(str(os.getpid()))
+    except FileExistsError:
         try:
             pid = int(LOCK_FILE.read_text().strip())
-            os.kill(pid, 0)  # Raises if process doesn't exist
+            os.kill(pid, 0)  # Raises OSError if process is gone
             logging.error(f"Security Commander is already running (PID {pid}). Exiting.")
             sys.exit(1)
-        except (ProcessLookupError, ValueError):
+        except (OSError, ValueError):
+            # Stale lock — previous run crashed without cleanup
             LOCK_FILE.unlink(missing_ok=True)
-    LOCK_FILE.write_text(str(os.getpid()))
+            acquire_lock()
 
 
 def release_lock():

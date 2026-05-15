@@ -17,6 +17,13 @@ from modules import platform_adapter
 
 logger = logging.getLogger(__name__)
 
+
+def _sanitize(value: str, max_len: int = 300) -> str:
+    """Strip control characters (newlines, nulls, ANSI escapes) from external strings."""
+    cleaned = re.sub(r'[\x00-\x1f\x7f]', '', str(value))
+    return cleaned[:max_len]
+
+
 # Process names commonly associated with crypto miners / malware
 SUSPICIOUS_PROCESS_PATTERNS = [
     # Cross-platform miners / shells
@@ -100,20 +107,21 @@ def detect_suspicious_processes(processes):
     """Flag processes that match known malware/miner patterns."""
     findings = []
     for proc in processes:
-        cmd = proc.get("cmd", "")
+        cmd = _sanitize(proc.get("cmd", ""))
+        user = _sanitize(proc.get("user", ""))
         for pattern in SUSPICIOUS_PROCESS_REGEX:
             if pattern.search(cmd):
                 findings.append({
                     "type": "suspicious_process",
                     "severity": "HIGH",
                     "pid": proc["pid"],
-                    "user": proc["user"],
+                    "user": user,
                     "cmd": cmd,
                     "detail": f"Process matches suspicious pattern: {pattern.pattern}",
                 })
                 break
         # Flag privileged processes (root / SYSTEM) with unusually high CPU
-        if proc["user"].upper() in ("ROOT", "SYSTEM"):
+        if user.upper() in ("ROOT", "SYSTEM"):
             name = cmd.split()[0].split('/')[-1].split('\\')[-1] if cmd else ""
             if name and name not in EXPECTED_PRIVILEGED_PROCESSES and not name.startswith('['):
                 try:
@@ -125,7 +133,7 @@ def detect_suspicious_processes(processes):
                         "type": "high_cpu_root_process",
                         "severity": "MEDIUM",
                         "pid": proc["pid"],
-                        "user": proc["user"],
+                        "user": user,
                         "cmd": cmd,
                         "detail": f"Privileged process consuming {cpu}% CPU",
                     })
